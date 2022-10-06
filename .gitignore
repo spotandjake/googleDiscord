@@ -1,0 +1,5 @@
+node_modules/
+.node-persist/
+
+.env
+yarn-error.log
