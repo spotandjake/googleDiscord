@@ -24,7 +24,7 @@ const scopes = [
 ];
 const clientID = process.env.CLIENT_ID;
 const clientSecret = process.env.CLIENT_SECRET;
-const domain = 'http://localhost';
+const domain = process.env.DOMAIN;
 const port = 8080;
 const fetchInterval = 1000 * 60 * 1; // ms * min * numberOfMin
 const classID = process.env.CLASS_ID;
