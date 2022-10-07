@@ -31,7 +31,7 @@ const classID = process.env.CLASS_ID;
 const webhook = process.env.WEBHOOK;
 const fetchDistanceMonths = 0.5;
 const colors = {
-  // Annoucement
+  // Announcement
   Annoucement: 0x03DAC5,
   // ClassWork
   ClassWork: 0x3700B3
@@ -372,9 +372,9 @@ const main = async () => {
       console.log('sending');
       for (const msgs of chunkArray(_messages, 10)) {
         await sendDiscordMessage(webhook, {
-          username: 'Annoucment Bot',
+          username: 'Announcement Bot',
           avatar_url: 'https://ssl.gstatic.com/classroom/favicon.png',
-          content: '<@&1027417122055401532> New Annoucement',
+          content: '<@&1027417122055401532> New Announcement',
           embeds: msgs
         })
       }
@@ -382,6 +382,15 @@ const main = async () => {
     } catch (e) {
       console.log(e);
       console.log('Error Fetching Announcements');
+      if (e.errors && e.errors[0].message == 'Insufficient Permission') {
+        await setData('refresh_token', '');
+        await sendDiscordMessage(webhook, {
+          username: 'Announcement Bot',
+          avatar_url: 'https://ssl.gstatic.com/classroom/favicon.png',
+          content: '<@&524413155212787743> Permission Issue'
+        })
+        process.exit();
+      }
     }
   }
   intervalLoop();
