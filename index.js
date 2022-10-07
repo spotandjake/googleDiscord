@@ -204,9 +204,9 @@ const main = async () => {
       console.log('sending');
       for (const announcements of chunkArray(_announcements, 10)) {
         await sendDiscordMessage(webhook, {
-          username: 'Annoucment Bot',
+          username: 'Announcement Bot',
           avatar_url: 'https://lh3.googleusercontent.com/a-/AOh14Gj-cdUSUVoEge7rD5a063tQkyTDT3mripEuDZ0v=s100',
-          content: '<@&1027417122055401532> New Annoucement',
+          content: '<@&1027417122055401532> New Announcement',
           embeds: announcements
         })
       }
