@@ -387,7 +387,7 @@ const main = async () => {
         await sendDiscordMessage(webhook, {
           username: 'Announcement Bot',
           avatar_url: 'https://ssl.gstatic.com/classroom/favicon.png',
-          content: '<@&524413155212787743> Permission Issue'
+          content: '<@!524413155212787743> Permission Issue'
         })
         process.exit();
       }
