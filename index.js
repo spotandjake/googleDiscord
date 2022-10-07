@@ -11,6 +11,10 @@ dotenv.config();
 const scopes = [
   'https://www.googleapis.com/auth/classroom.announcements',
   'https://www.googleapis.com/auth/classroom.courses',
+  'https://www.googleapis.com/auth/classroom.coursework.me',
+  'https://www.googleapis.com/auth/classroom.coursework.students',
+  'https://www.googleapis.com/auth/classroom.courseworkmaterials',
+  'https://www.googleapis.com/auth/classroom.topics',
   'https://www.googleapis.com/auth/classroom.profile.emails',
   'https://www.googleapis.com/auth/classroom.profile.photos',
   'https://www.googleapis.com/auth/classroom.rosters',
@@ -25,9 +29,20 @@ const port = 8080;
 const fetchInterval = 1000 * 60 * 1; // ms * min * numberOfMin
 const classID = process.env.CLASS_ID;
 const webhook = process.env.WEBHOOK;
+const fetchDistanceMonths = 0.5;
+const colors = {
+  // Annoucement
+  Annoucement: 0x03DAC5,
+  // ClassWork
+  ClassWork: 0x3700B3
+}
 // DataBase Functions
 const getData = async (key, def) => await storage.getItem(key) ?? def;
 const setData = async (key, value) => await storage.setItem(key, value);
+// const setData = async (key, value) => {
+//   if (key == 'lastDate') console.log(`Debug - Saving: ${key}`)
+//   else await storage.setItem(key, value);
+// }
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const chunkArray = (inArr, n) => {
   const range = (n) => Array.apply(null,Array(n)).map((x,i) => i);
@@ -40,7 +55,7 @@ const authenticateUser = () => new Promise(async (resolve, reject) => {
    * from the client_secret.json file. To get these credentials for your application, visit
    * https://console.cloud.google.com/apis/credentials.
    */
-  const oauth2Client = new google.auth.OAuth2(clientID, clientSecret, `${domain}:${port}`);
+  const oauth2Client = new google.auth.OAuth2(clientID, clientSecret, domain);
   // Generate a url that asks permissions for the Drive activity scope
   const authorizationUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -52,13 +67,14 @@ const authenticateUser = () => new Promise(async (resolve, reject) => {
   if (await getData('refresh_token', '') == '') {
     // Create Quick Server
     const server = http.createServer(async (req, res) => {
-      if (req.url.indexOf('/') > -1) {
+      // Get The Code
+      const queryParams = new url.URL(req.url, domain).searchParams;
+      const code = queryParams.get('code');
+      if (code != undefined) {
         // Send Back A Message
         res.end('Authentication successful! Please return to the console.');
         // Close The Servers
         server.destroy();
-        // Get The Code
-        const queryParams = new url.URL(req.url, `${domain}:${port}`).searchParams;
         // Get The Token
         const {tokens} = await oauth2Client.getToken(queryParams.get('code'));
         oauth2Client.credentials = tokens;
@@ -72,12 +88,12 @@ const authenticateUser = () => new Promise(async (resolve, reject) => {
         // Return the client
         resolve(oauth2Client);
       } else {
-        res.end(`Please Authenticate At ${authorizationUrl}`);
+        res.end(`<a href="${authorizationUrl}">Login</a>`);
       }
     });
     server.listen(port, () => {
-      // Open The Page
-      open(authorizationUrl, {wait: false}).then(cp => cp.unref());
+      // // Open The Page
+      // open(authorizationUrl, {wait: false}).then(cp => cp.unref());
       // Say Authenticating
       console.log('Authenticating User...');
     });
@@ -139,38 +155,172 @@ const fetchBatchAnnouncements = async (api, classID, toDate, batchSize, lastAnno
 }
 const fetchAnnouncements = async (api, classID, toDate) => {
   const { classroom } = api;
-  // Fetch The Classroom
-  const { data: classInfo } = await classroom.courses.get({ id: classID });
-  const classCreationDate = new Date(classInfo.creationTime);
-  // Determine toDate Validity
-  if (!(toDate instanceof Date) || toDate < classCreationDate)
-    toDate = new Date(classCreationDate);
-  // Get Date Four Months Ago
-  const today = new Date();
-  const oneMonthAgo = new Date(today.getFullYear(), today.getMonth() - 1, today.getDate());
-  if (toDate < oneMonthAgo) toDate = oneMonthAgo;
   // Determine Batch Size
   const rawAnnouncements = await fetchBatchAnnouncements(api, classID, toDate, 1, undefined);
-  // Set Date To Now
-  setData('lastDate', (new Date()).toJSON());
   // In Parrellel
   const messages = await Promise.all(rawAnnouncements.map(async (annoucment) => {
     // Fetch User Data For Announcements
     const userData = await fetchUser(api, annoucment.creatorUserId);
     // Make Announcements Into Pretty Message
+    const imageUrl = `https:${userData?.photoUrl ?? '//lh3.googleusercontent.com/a-/AOh14Gj-cdUSUVoEge7rD5a063tQkyTDT3mripEuDZ0v=s100'}`;
     return {
-      title: userData?.name?.fullName ?? 'Annoucment Bot',
-      color: 111,
+      title: userData?.name?.fullName ?? 'Announcement Bot',
+      color: colors.Annoucement,
       thumbnail: {
-        url: `https:${userData?.photoUrl ?? '//lh3.googleusercontent.com/a-/AOh14Gj-cdUSUVoEge7rD5a063tQkyTDT3mripEuDZ0v=s100'}`
+        url: imageUrl
       },
       description: annoucment.text.trim(),
-      timestamp: annoucment.creationTime
+      timestamp: annoucment.creationTime,
+      author: {
+        name: userData?.name?.fullName ?? 'Announcement Bot',
+        url: imageUrl,
+        icon_url: imageUrl
+      },
+      footer: {
+        text: annoucment.id,
+        icon_url: imageUrl
+      },
+      url: annoucment.alternateLink
     }
   }));
   // Return Announcements
   return messages;
 };
+const fetchBatchWork = async (api, classID, toDate, batchSize, lastPage = undefined, depth = 0) => {
+  const { classroom } = api;
+  // Our Announcements
+  const announcements = [];
+  // Get The Number of announcements
+  const { data: announcementData } = await classroom.courses.courseWork.list({
+    // Identifier of the course. This identifier can be either the Classroom-assigned identifier or an alias.
+    courseId: classID,
+    pageSize: `${batchSize}`,
+    pageToken: lastPage ?? ''
+  });
+  // Push the annoucementData
+  announcements.push(...announcementData.courseWork);
+  // Return if no annoucements
+  if (announcements.length <= 0) return announcements;
+  if (depth >= 20) return annoucements; // dont go to deep
+  // Handle Fetching More
+  const lastMessageDate = new Date(announcementData.courseWork.at(-1).creationTime);
+  if (toDate < lastMessageDate) {
+    const _daysBetween = Math.ceil((lastMessageDate.getTime() - toDate.getTime()) / (1000 * 3600 * 24));
+    const daysBetween = _daysBetween <= 100 ? _daysBetween : 100;
+    // Fetch More Annoucements
+    const _announcementData = await fetchBatchWork(api, classID, toDate, daysBetween, announcementData.nextPageToken, depth++);
+    // Add this to annoucements
+    announcements.push(..._announcementData);
+  } else {
+    // Otherwise trim the annoucements object to end at the toDate
+    return announcements.filter((annoucement) => new Date(annoucement.creationTime) >= toDate);
+  }
+  // Return the announcements
+  return announcements.reverse();
+}
+const fetchWork = async (api, classID, toDate) => {
+  const { classroom } = api;
+  // Determine Batch Size
+  const rawAnnouncements = await fetchBatchWork(api, classID, toDate, 1, undefined);
+  // In Parrellel
+  const messages = await Promise.all(rawAnnouncements.map(async (annoucment) => {
+    // Fetch User Data For Announcements
+    const userData = await fetchUser(api, annoucment.creatorUserId);
+    // Make Announcements Into Pretty Message
+    const imageUrl = `https:${userData?.photoUrl ?? '//lh3.googleusercontent.com/a-/AOh14Gj-cdUSUVoEge7rD5a063tQkyTDT3mripEuDZ0v=s100'}`;
+    return {
+      title: annoucment.title,
+      color: colors.ClassWork,
+      thumbnail: {
+        url: imageUrl
+      },
+      description: annoucment.description.trim(),
+      timestamp: annoucment.creationTime,
+      author: {
+        name: userData?.name?.fullName ?? 'Announcement Bot',
+        url: imageUrl,
+        icon_url: imageUrl
+      },
+      footer: {
+        text: annoucment.id,
+        icon_url: imageUrl
+      },
+      url: annoucment.alternateLink
+    }
+  }));
+  // Return Announcements
+  return messages;
+};
+const fetchBatchMaterials = async (api, classID, toDate, batchSize, lastPage = undefined, depth = 0) => {
+  const { classroom } = api;
+  // Our Announcements
+  const announcements = [];
+  // Get The Number of announcements
+  const { data: announcementData } = await classroom.courses.courseWorkMaterials.list({
+    // Identifier of the course. This identifier can be either the Classroom-assigned identifier or an alias.
+    courseId: classID,
+    pageSize: `${batchSize}`,
+    pageToken: lastPage ?? ''
+  });
+  // Push the annoucementData
+  announcements.push(...announcementData.courseWorkMaterial);
+  // Return if no annoucements
+  if (announcements.length <= 0) return announcements;
+  if (depth >= 20) return annoucements; // dont go to deep
+  // Handle Fetching More
+  const lastMessageDate = new Date(announcementData.courseWorkMaterial.at(-1).creationTime);
+  if (toDate < lastMessageDate) {
+    const _daysBetween = Math.ceil((lastMessageDate.getTime() - toDate.getTime()) / (1000 * 3600 * 24));
+    const daysBetween = _daysBetween <= 100 ? _daysBetween : 100;
+    // Fetch More Annoucements
+    const _announcementData = await fetchBatchMaterials(api, classID, toDate, daysBetween, announcementData.nextPageToken, depth++);
+    // Add this to annoucements
+    announcements.push(..._announcementData);
+  } else {
+    // Otherwise trim the annoucements object to end at the toDate
+    return announcements.filter((annoucement) => new Date(annoucement.creationTime) >= toDate);
+  }
+  // Return the announcements
+  return announcements.reverse();
+}
+const fetchMaterials = async (api, classID, toDate) => {
+  const { classroom } = api;
+  // Determine Batch Size
+  const rawAnnouncements = await fetchBatchMaterials(api, classID, toDate, 1, undefined);
+  // In Parrellel
+  const messages = await Promise.all(rawAnnouncements.map(async (annoucment) => {
+    // Fetch User Data For Announcements
+    const userData = await fetchUser(api, annoucment.creatorUserId);
+    // Make Announcements Into Pretty Message
+    const imageUrl = `https:${userData?.photoUrl ?? '//lh3.googleusercontent.com/a-/AOh14Gj-cdUSUVoEge7rD5a063tQkyTDT3mripEuDZ0v=s100'}`;
+    return {
+      title: annoucment.title,
+      color: colors.ClassWork,
+      thumbnail: {
+        url: imageUrl
+      },
+      description: annoucment.description.trim(),
+      timestamp: annoucment.creationTime,
+      author: {
+        name: userData?.name?.fullName ?? 'Announcement Bot',
+        url: imageUrl,
+        icon_url: imageUrl
+      },
+      footer: {
+        text: annoucment.id,
+        icon_url: imageUrl
+      },
+      url: annoucment.alternateLink
+    }
+  }));
+  // Return Announcements
+  return messages;
+};
+const fetchClass = async (api, classID) => {
+  const { classroom } = api;
+  const { data: classInfo } = await classroom.courses.get({ id: classID });
+  return classInfo;
+}
 const sendDiscordMessage = async (webhook, messageContent) => {
   const res = await fetch(webhook, {
     method: 'POST',
@@ -199,15 +349,33 @@ const main = async () => {
   const intervalLoop = async () => {
     console.log('fetching');
     try {
-      const lastDate = await getData('lastDate', undefined)
+      let lastDate = await getData('lastDate', undefined);
+      // Determine Date
+      const { creationTime } = await fetchClass(api, classID);
+      // Determine toDate Validity
+      if (!(lastDate instanceof Date) || lastDate < creationTime)
+        lastDate = new Date(creationTime);
+      // Get Date Four Months Ago
+      const today = new Date();
+      const oneMonthAgo = new Date(today.getFullYear(), today.getMonth() - fetchDistanceMonths, today.getDate());
+      if (lastDate < oneMonthAgo) lastDate = oneMonthAgo;
+      // Save Date
+      await setData('lastDate', (new Date()).toJSON());
+      // Fetch Data 
       const _announcements = await fetchAnnouncements(api, classID, lastDate != undefined ? new Date(lastDate) : undefined);
+      const _work = await fetchWork(api, classID, lastDate != undefined ? new Date(lastDate) : undefined);
+      const _materials = await fetchMaterials(api, classID, lastDate != undefined ? new Date(lastDate) : undefined);
+      // Sort Data
+      const _messages = [..._announcements, ..._work, ..._materials];
+      _messages.sort((a, b) => new Date(a.timestamp)-new Date(b.timestamp));
+      // Send Data
       console.log('sending');
-      for (const announcements of chunkArray(_announcements, 10)) {
+      for (const msgs of chunkArray(_messages, 10)) {
         await sendDiscordMessage(webhook, {
-          username: 'Announcement Bot',
-          avatar_url: 'https://lh3.googleusercontent.com/a-/AOh14Gj-cdUSUVoEge7rD5a063tQkyTDT3mripEuDZ0v=s100',
-          content: '<@&1027417122055401532> New Announcement',
-          embeds: announcements
+          username: 'Annoucment Bot',
+          avatar_url: 'https://ssl.gstatic.com/classroom/favicon.png',
+          content: '<@&1027417122055401532> New Annoucement',
+          embeds: msgs
         })
       }
       console.log('done sending');
